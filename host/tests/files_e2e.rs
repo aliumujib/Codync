@@ -167,6 +167,22 @@ async fn rejects_invalid_sources_without_a_file_entry() {
     assert!(results.as_array().unwrap().iter().all(|r| r["isError"] == true));
 }
 
+async fn published(path: &std::path::Path) {
+    let waited = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Ok(data) = std::fs::read(path)
+                && let Ok(results) = serde_json::from_slice::<Value>(&data)
+            {
+                assert!(results.as_array().unwrap().iter().all(|result| result["isError"] != true), "{results}");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    waited.unwrap();
+}
+
 async fn rejected(path: &std::path::Path) {
     let waited = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
@@ -192,7 +208,7 @@ async fn rejected(path: &std::path::Path) {
 }
 
 #[tokio::test]
-async fn groups_routines_and_delegated_turns_cannot_publish_files() {
+async fn groups_and_delegated_turns_cannot_publish_files_but_routines_can() {
     let host = Host::start().await;
     let agent = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/file_agent.py");
     let created = host.call("createBot", json!({"name":"Recipient", "backend":"custom", "cwd":host.home, "command":common::python_agent(&agent), "connectors":[], "notify":false})).await;
@@ -210,10 +226,17 @@ async fn groups_routines_and_delegated_turns_cannot_publish_files() {
             json!({"botId":bot,"name":"Files","instruction":"share-files","triggers":[{"type":"webhook"}]}),
         )
         .await;
+    // A routine's turn writes into the bot's own chat, so its files are published there.
+    for name in ["binary.dat", ".hidden", "empty", "report.pdf"] {
+        std::fs::write(host.home.join(name), []).unwrap();
+    }
     host.call("runRoutine", json!({"botId":bot,"id":routine["routine"]["id"]})).await;
-    rejected(&results_path).await;
+    published(&results_path).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     std::fs::remove_file(&results_path).unwrap();
+    let files_in = |history: &Value| history["entries"].as_array().unwrap().iter().filter(|e| e["data"]["files"].is_array()).count();
+    let after_routine = files_in(&host.call("history", json!({"botId":bot})).await);
+    assert_eq!(after_routine, 4);
     let caller_dir = host.home.join("caller");
     std::fs::create_dir_all(&caller_dir).unwrap();
     let caller_agent = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/team_agent.py");
@@ -223,8 +246,7 @@ async fn groups_routines_and_delegated_turns_cannot_publish_files() {
     tokio::time::sleep(Duration::from_millis(800)).await;
     host.call("send", json!({"botId":caller,"text":format!("DELEGATE {bot}")})).await;
     rejected(&results_path).await;
-    let history = host.call("history", json!({"botId":bot})).await;
-    assert!(history["entries"].as_array().unwrap().iter().all(|entry| entry["data"]["files"].is_null()));
+    assert_eq!(files_in(&host.call("history", json!({"botId":bot})).await), after_routine);
 }
 
 #[tokio::test]

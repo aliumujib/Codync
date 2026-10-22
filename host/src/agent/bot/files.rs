@@ -80,8 +80,9 @@ impl Actor {
 
     fn can_send_file(&self) -> Result<i64> {
         ensure!(!self.stop_requested, "turn is stopping");
+        // A routine's turn writes into the bot's own chat (`Lane::main`), so its files can land there too.
         ensure!(
-            self.active_group.is_none() && self.active_request.is_none() && self.active_routine.is_none(),
+            self.active_group.is_none() && self.active_request.is_none(),
             "send_file and artifact cards are only available in the bot's own chat"
         );
         self.turn.ok_or_else(|| anyhow!("no turn is running: between turns, tell the user with send_message"))
