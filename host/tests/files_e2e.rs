@@ -234,7 +234,9 @@ async fn groups_and_delegated_turns_cannot_publish_files_but_routines_can() {
     published(&results_path).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     std::fs::remove_file(&results_path).unwrap();
-    let files_in = |history: &Value| history["entries"].as_array().unwrap().iter().filter(|e| e["data"]["files"].is_array()).count();
+    let files_in = |history: &Value| {
+        history["entries"].as_array().unwrap().iter().filter(|e| e["data"]["files"].is_array()).count()
+    };
     let after_routine = files_in(&host.call("history", json!({"botId":bot})).await);
     assert_eq!(after_routine, 4);
     let caller_dir = host.home.join("caller");

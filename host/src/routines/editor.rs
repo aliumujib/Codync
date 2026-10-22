@@ -66,7 +66,7 @@ impl ScheduleDraft {
             }
             Trigger::Webhook => draft.kind = "webhook".into(),
             Trigger::Event { .. } => draft.kind = "keep".into(),
-            Trigger::Cron { expression, time_zone } => {
+            Trigger::Cron { expression, time_zone, .. } => {
                 draft.zone.clone_from(time_zone);
                 draft.expression.clone_from(expression);
                 draft.calendar_style = "custom".into();
@@ -141,7 +141,7 @@ impl ScheduleDraft {
             }
             "once" => vec![Trigger::Once { at: self.at }],
             "webhook" => vec![Trigger::Webhook],
-            "cron" => vec![Trigger::Cron { expression: self.cron()?, time_zone: self.zone.clone() }],
+            "cron" => vec![Trigger::Cron { expression: self.cron()?, time_zone: self.zone.clone(), jitter_seconds: 0 }],
             _ => bail!("choose when this routine should run"),
         })
     }

@@ -29,6 +29,10 @@ pub enum Trigger {
     Cron {
         expression: String,
         time_zone: String,
+        /// Fire a random `0..jitter_seconds` after each occurrence, drawn afresh every time, so a daily
+        /// schedule doesn't run at the same minute every day.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        jitter_seconds: i64,
     },
     Webhook,
     Event {
@@ -39,6 +43,20 @@ pub enum Trigger {
     },
 }
 
+#[expect(clippy::trivially_copy_pass_by_ref, reason = "serde's skip_serializing_if passes a reference")]
+fn is_zero(v: &i64) -> bool {
+    *v == 0
+}
+
+/// A uniformly random delay in `0..seconds` seconds, in milliseconds.
+fn jitter_ms(seconds: i64) -> Result<i64> {
+    let ms = u64::try_from(seconds.checked_mul(1000).context("jitter overflow")?).context("negative jitter")?;
+    if ms == 0 {
+        return Ok(0);
+    }
+    Ok(i64::try_from(getrandom::u64().context("no randomness for jitter")? % ms)?)
+}
+
 impl Trigger {
     pub fn validate(&self, now: i64) -> Result<()> {
         match self {
@@ -46,7 +64,10 @@ impl Trigger {
                 bail!("interval must be between 1 second and 365 days")
             }
             Self::Once { at } if *at <= now => bail!("one-time trigger must be in the future"),
-            Self::Cron { expression, time_zone } => {
+            Self::Cron { expression, time_zone, jitter_seconds } => {
+                if !(0..=86_400).contains(jitter_seconds) {
+                    bail!("jitterSeconds must be between 0 and 86400");
+                }
                 if expression.split_whitespace().count() != 5 {
                     bail!("use a five-field cron expression");
                 }
@@ -81,12 +102,13 @@ impl Trigger {
                     .context("schedule overflow")?,
             ),
             Self::Once { at } => (*at > after).then_some(*at),
-            Self::Cron { expression, time_zone } => {
+            Self::Cron { expression, time_zone, jitter_seconds } => {
                 let zone = time_zone.parse::<Tz>().context("invalid time zone")?;
                 let date = DateTime::<Utc>::from_timestamp_millis(after)
                     .context("invalid schedule timestamp")?
                     .with_timezone(&zone);
-                Some(Cron::from_str(expression)?.find_next_occurrence(&date, false)?.timestamp_millis())
+                let at = Cron::from_str(expression)?.find_next_occurrence(&date, false)?.timestamp_millis();
+                Some(at + jitter_ms(*jitter_seconds)?)
             }
             Self::Webhook | Self::Event { .. } => None,
         })
@@ -113,10 +135,15 @@ impl Trigger {
             Self::Interval { seconds } => format!("Every {seconds} seconds"),
             Self::Once { at } => DateTime::from_timestamp_millis(*at)
                 .map_or_else(|| "Once".into(), |d| format!("Once at {}", d.to_rfc3339())),
-            Self::Cron { expression, time_zone } => format!(
-                "{} · {time_zone}",
+            Self::Cron { expression, time_zone, jitter_seconds } => format!(
+                "{} · {time_zone}{}",
                 Cron::from_str(expression)
-                    .map_or_else(|_| expression.clone(), |cron| cron.describe().trim_end_matches('.').to_owned())
+                    .map_or_else(|_| expression.clone(), |cron| cron.describe().trim_end_matches('.').to_owned()),
+                if *jitter_seconds > 0 {
+                    format!(" · plus a random delay of up to {} min", jitter_seconds / 60)
+                } else {
+                    String::new()
+                }
             ),
             Self::Webhook => "When a webhook fires".into(),
             Self::Event { source, event, .. } => format!("{source} · {event}"),
@@ -141,8 +168,40 @@ impl Trigger {
 mod tests {
     use super::*;
     #[test]
+    fn cron_jitter_fires_within_the_window_and_varies() {
+        let plain =
+            Trigger::Cron { expression: "10 7 * * *".into(), time_zone: "Europe/London".into(), jitter_seconds: 0 };
+        let jittered =
+            Trigger::Cron { expression: "10 7 * * *".into(), time_zone: "Europe/London".into(), jitter_seconds: 6600 };
+        jittered.validate(0).unwrap();
+        let base = plain.next(0).unwrap().unwrap();
+        let draws: Vec<i64> = (0..50).map(|_| jittered.next(0).unwrap().unwrap()).collect();
+        assert!(draws.iter().all(|at| (base..base + 6_600_000).contains(at)));
+        assert!(draws.iter().any(|at| *at != draws[0]));
+        assert!(
+            Trigger::Cron { expression: "10 7 * * *".into(), time_zone: "UTC".into(), jitter_seconds: 86_401 }
+                .validate(0)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn cron_jitter_is_optional_on_the_wire() {
+        let old: Trigger =
+            serde_json::from_value(serde_json::json!({"type":"cron","expression":"10 7 * * *","timeZone":"UTC"}))
+                .unwrap();
+        assert_eq!(old, Trigger::Cron { expression: "10 7 * * *".into(), time_zone: "UTC".into(), jitter_seconds: 0 });
+        assert!(serde_json::to_value(&old).unwrap().get("jitterSeconds").is_none());
+        let new: Trigger = serde_json::from_value(
+            serde_json::json!({"type":"cron","expression":"10 7 * * *","timeZone":"UTC","jitterSeconds":600}),
+        )
+        .unwrap();
+        assert!(new.description().ends_with("plus a random delay of up to 10 min"));
+    }
+
+    #[test]
     fn taipei_sunday_afternoon_uses_correct_utc_time() {
-        let t = Trigger::Cron { expression: "20 14 * * 0".into(), time_zone: "Asia/Taipei".into() };
+        let t = Trigger::Cron { expression: "20 14 * * 0".into(), time_zone: "Asia/Taipei".into(), jitter_seconds: 0 };
         let now = DateTime::parse_from_rfc3339("2026-09-26T12:00:00Z").unwrap().timestamp_millis();
         let expected = DateTime::parse_from_rfc3339("2026-09-27T06:20:00Z").unwrap().timestamp_millis();
         assert_eq!(t.next(now).unwrap(), Some(expected));
@@ -156,7 +215,8 @@ mod tests {
             ("0 9 * * 1,3,5", "2026-09-28T01:00:00Z"),
             ("0 9 31 * *", "2026-10-31T01:00:00Z"),
         ] {
-            let trigger = Trigger::Cron { expression: expression.into(), time_zone: "Asia/Taipei".into() };
+            let trigger =
+                Trigger::Cron { expression: expression.into(), time_zone: "Asia/Taipei".into(), jitter_seconds: 0 };
             trigger.validate(now).unwrap();
             let expected = DateTime::parse_from_rfc3339(expected).unwrap().timestamp_millis();
             assert_eq!(trigger.next(now).unwrap(), Some(expected), "{expression}");
@@ -177,6 +237,10 @@ mod tests {
     fn invalid_schedules_are_rejected() {
         assert!(Trigger::Interval { seconds: 0 }.validate(0).is_err());
         assert!(Trigger::Once { at: 0 }.validate(0).is_err());
-        assert!(Trigger::Cron { expression: "* * * * *".into(), time_zone: "not-a-zone".into() }.validate(0).is_err());
+        assert!(
+            Trigger::Cron { expression: "* * * * *".into(), time_zone: "not-a-zone".into(), jitter_seconds: 0 }
+                .validate(0)
+                .is_err()
+        );
     }
 }
