@@ -151,7 +151,7 @@ import com.kyant.shapes.Capsule
             FileViewer(file, workDir, close = { store.closeViewer() },
                 share = { copy, name -> store.attachments.open(copy, name) },
                 openWith = { copy, name -> store.attachments.openWith(copy, name) },
-                markdown = { MarkdownText(it) })
+                markdown = { text, side -> MarkdownText(text, blockPadding = side) })
         }
     }
 }

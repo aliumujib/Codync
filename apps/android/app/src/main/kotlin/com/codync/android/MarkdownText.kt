@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.ImageLoader
 import com.codync.android.design.*
@@ -28,11 +29,11 @@ val LocalNetworkImages = staticCompositionLocalOf<ImageLoader> { error("Missing 
  * A bot's reply as Markdown, drawn by the `:markdown` renderer (from Control): headings, lists and task
  * lists, tables, fenced code with a copy button, quotes, footnotes, and file paths and links as chips.
  * Links open only for web and mail addresses; images show as their text, so a reply never makes the
- * phone fetch an address.
+ * phone fetch an address. [blockPadding] insets the text but not tables, which scroll edge to edge.
  */
-@Composable fun MarkdownText(source: String, selectable: Boolean = true, color: Color = Palette.text) {
+@Composable fun MarkdownText(source: String, selectable: Boolean = true, color: Color = Palette.text, blockPadding: Dp = 0.dp) {
     val uris = LocalUriHandler.current
-    CodyncMarkdownText(source, color = color, selectable = selectable, onLinkClicked = { link ->
+    CodyncMarkdownText(source, color = color, selectable = selectable, blockHorizontalPadding = blockPadding, onLinkClicked = { link ->
         if (link.startsWith("https://") || link.startsWith("http://") || link.startsWith("mailto:")) runCatching { uris.openUri(link) }
     })
 }

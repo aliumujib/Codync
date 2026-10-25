@@ -49,6 +49,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.codync.android.design.GlassStage
 import com.codync.android.design.Hairline
@@ -181,14 +182,14 @@ private fun pdfError(error: Exception): String = when (error) {
 }
 
 /** A Markdown file, read like a chat message. */
-@Composable internal fun BoxScope.MarkdownPane(file: File, insets: PaddingValues, markdown: @Composable (String) -> Unit) {
+@Composable internal fun BoxScope.MarkdownPane(file: File, insets: PaddingValues, markdown: @Composable (String, Dp) -> Unit) {
     val text by rememberLoaded(file) { TextPreview.load(file) }
     when (val loaded = text) {
         Loaded.Waiting -> Spinner(22.dp, Modifier.align(Alignment.Center))
         is Loaded.Failed -> Message("doc.text", loaded.message)
-        is Loaded.Done -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(insets).padding(horizontal = 18.dp)) {
-            markdown(loaded.value.lines.joinToString("\n"))
-            if (loaded.value.truncated) Truncated()
+        is Loaded.Done -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(insets)) {
+            markdown(loaded.value.lines.joinToString("\n"), 18.dp)
+            if (loaded.value.truncated) Box(Modifier.padding(horizontal = 18.dp)) { Truncated() }
         }
     }
 }

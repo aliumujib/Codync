@@ -40,6 +40,7 @@ internal fun MarkdownTableView(
     onFilePathClicked: (MarkdownInline.FilePath) -> Unit,
     onCommandClicked: (String) -> Unit,
     tokenContext: InlineTokenContext,
+    edgePadding: Dp = 0.dp,
 ) {
     if (table.headers.isEmpty()) return
 
@@ -68,7 +69,8 @@ internal fun MarkdownTableView(
         ) {
             Column(
                 modifier = Modifier
-                    .padding(horizontal = 16.dp)
+                    // Inset like the text around it at rest; scrolls out to the screen edges.
+                    .padding(horizontal = edgePadding)
                     .clip(theme.cardShape)
                     .border(1.dp, theme.borderColor, theme.cardShape),
             ) {

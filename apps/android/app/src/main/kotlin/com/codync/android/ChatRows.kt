@@ -278,7 +278,7 @@ internal val Entry.reactions: List<String> get() = (data["reactions"] as? JsonAr
  * text selection takes the same long press.
  */
 @Composable private fun AgentText(text: String, selectable: Boolean) {
-    Box(Modifier.background(Palette.bubbleAgent).padding(horizontal = 16.dp, vertical = 10.dp)) { MarkdownText(text, selectable) }
+    Box(Modifier.background(Palette.bubbleAgent).padding(vertical = 10.dp)) { MarkdownText(text, selectable, blockPadding = 16.dp) }
 }
 
 /** A message's reactions: the user's (tapping one takes it back), then the bots', each emoji with the avatars of the

@@ -346,6 +346,7 @@ internal fun MarkdownBlockView(
             onFilePathClicked = onFilePathClicked,
             onCommandClicked = onCommandClicked,
             tokenContext = tokenContext,
+            edgePadding = blockHorizontalPadding,
         )
 
         is MarkdownUrlBlock -> MarkdownRichText(

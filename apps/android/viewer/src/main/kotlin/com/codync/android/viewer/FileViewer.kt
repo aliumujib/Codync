@@ -38,9 +38,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import com.codync.android.design.CodyncTheme
+import com.codync.android.design.Edge
+import com.codync.android.design.ScrollEdge
 import com.codync.android.design.GlassStage
 import com.codync.android.design.IconButton
 import com.codync.android.design.LocalDark
@@ -65,7 +68,8 @@ import kotlinx.coroutines.launch
  * the list. Share and Open with always hand out the checked copy.
  *
  * @param workDir where files taken out of a ZIP go; it must be somewhere [share] and [openWith] can hand out.
- * @param markdown the app's own Markdown renderer, so `.md` files read like chat messages.
+ * @param markdown the app's own Markdown renderer, so `.md` files read like chat messages. It insets text by
+ *   `sidePadding` and lets tables run edge to edge.
  */
 @Composable fun FileViewer(
     file: ViewerFile,
@@ -73,7 +77,7 @@ import kotlinx.coroutines.launch
     close: () -> Unit,
     share: (File, String) -> Unit,
     openWith: (File, String) -> Unit,
-    markdown: @Composable (String) -> Unit,
+    markdown: @Composable (text: String, sidePadding: Dp) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var stack by remember(file.id) { mutableStateOf(listOf(file)) }
@@ -133,7 +137,7 @@ internal class Downloader(private val file: ViewerFile, private val scope: Corou
     workDir: File,
     share: (File, String) -> Unit,
     openWith: (File, String) -> Unit,
-    markdown: @Composable (String) -> Unit,
+    markdown: @Composable (text: String, sidePadding: Dp) -> Unit,
     open: (ViewerFile) -> Unit,
 ) {
     val named = remember(file.id) { FileKind.of(file.name) }
@@ -151,6 +155,11 @@ internal class Downloader(private val file: ViewerFile, private val scope: Corou
     CodyncTheme(dark = media || LocalDark.current) {
         val insets = viewerInsets()
         GlassStage(Modifier.fillMaxSize().background(if (media) Color.Black else Palette.background), chrome = {
+            // Scrolling pages blur and fade under the bars, as on iOS, so the header stays readable.
+            if (!media && !kind.streams) {
+                ScrollEdge(Edge.Top, insets.calculateTopPadding(), Modifier.align(Alignment.TopCenter))
+                ScrollEdge(Edge.Bottom, insets.calculateBottomPadding(), Modifier.align(Alignment.BottomCenter))
+            }
             AnimatedVisibility(chrome || !media, Modifier.align(Alignment.TopCenter), enter = fadeIn(), exit = fadeOut()) {
                 Header(file.name, detail(file, kind, load), nested, back,
                     share = { loader.fetch { share(it, file.name) } }, openWith = { loader.fetch { openWith(it, file.name) } })
