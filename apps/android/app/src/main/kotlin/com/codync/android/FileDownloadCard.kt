@@ -27,23 +27,24 @@ import com.codync.android.core.SharedFile
 import com.codync.android.design.*
 import com.kyant.shapes.RoundedRectangle
 
-/** A file a bot shared, as iOS `FileDownloadCard`: an image shows itself (tap for full size), then its name and size, and a
- *  button to download (or cancel). */
+/**
+ * A file a bot shared, as iOS `FileDownloadCard`: an image shows itself, then its name and size, and a button to
+ * download (or cancel). Tapping the image or the row opens the file in the viewer.
+ */
 @Composable internal fun FileDownloadCard(entry: Entry, file: SharedFile, state: AppState, store: AppStore) {
-    var viewing by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().clip(RoundedRectangle(16.dp)).background(Palette.bubbleAgent).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (file.showsAsImage) SharedImage(file, entry.id, 720, state, store, Modifier.sizeIn(maxHeight = 280.dp)
-            .clip(RoundedRectangle(10.dp)).plainButton { viewing = true }.semantics { contentDescription = file.name })
+            .clip(RoundedRectangle(10.dp)).plainButton { store.viewFile(entry, file) }.semantics { contentDescription = file.name })
         FileRow(entry, file, state, store)
     }
-    SharedImageSheet(file.takeIf { viewing }, entry.id, state, store) { viewing = false }
 }
 
 @Composable private fun FileRow(entry: Entry, file: SharedFile, state: AppState, store: AppStore) {
     val download = state.fileDownloads[file.id]
     val busy = download is FileDownloadState.Downloading
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Row(Modifier.fillMaxWidth().plainButton { store.viewFile(entry, file) }.semantics { contentDescription = "Open " + file.name },
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Symbol(AttachmentIcon.symbol(file.name), size = 24.dp, tint = Palette.secondary)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(file.name, style = Type.subheadline.semibold, color = Palette.text, maxLines = 2, overflow = TextOverflow.Ellipsis)

@@ -59,6 +59,19 @@ class HostFilesTest {
         buildJsonObject { put("size", bytes.size); put("data", Base64.getEncoder().encodeToString(bytes.copyOfRange(offset, end))) }
     }
 
+    @Test fun `a shared file is read one chunk at a time from any offset`() = runBlocking {
+        val bytes = ByteArray(HostFiles.CHUNK_BYTES + 1000) { (it % 251).toByte() }
+        val files = host(bytes)
+        assertArrayEquals(bytes.copyOfRange(0, HostFiles.CHUNK_BYTES), files.readSharedChunk("entry", shared(bytes), 0))
+        assertArrayEquals(bytes.copyOfRange(500, 500 + HostFiles.CHUNK_BYTES), files.readSharedChunk("entry", shared(bytes), 500))
+        val tail = bytes.size - 10L
+        assertArrayEquals(bytes.copyOfRange(tail.toInt(), bytes.size), files.readSharedChunk("entry", shared(bytes), tail))
+        val short = HostFiles { _, _, _ -> buildJsonObject { put("size", bytes.size); put("data", "YWI=") } }
+        assertFails<java.io.IOException> { short.readSharedChunk("entry", shared(bytes), 0) }
+        assertFails<IllegalArgumentException> { files.readSharedChunk("entry", shared(bytes), bytes.size + 1L) }
+        Unit
+    }
+
     @Test fun `a shared file arrives whole and verified in its own folder`() = runBlocking {
         val root = Files.createTempDirectory("codync-shared").toFile()
         try {

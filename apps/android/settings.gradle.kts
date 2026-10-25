@@ -22,4 +22,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "CodyncAndroid"
-include(":app", ":core", ":design")
+include(":app", ":core", ":design", ":viewer")

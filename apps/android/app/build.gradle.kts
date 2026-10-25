@@ -185,6 +185,7 @@ dependencies {
     implementation(libs.camera.view)
     implementation(project(":core"))
     implementation(project(":design"))
+    implementation(project(":viewer"))
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.foundation)

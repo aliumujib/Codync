@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.codync.android.core.*
 import com.codync.android.design.*
+import com.codync.android.viewer.FileViewer
 import com.kyant.shapes.Capsule
 
 /**
@@ -143,6 +144,16 @@ import com.kyant.shapes.Capsule
     CodyncSheet(callLine, { callLine = null }) { CallConversationView(bot.id, it, state, store) }
     CodyncSheet(app, { app = null; setupEntry = null }) { ComposioConnectSheet(it, state, store, setupEntry) { store.refreshPlugins() } }
     CodyncSheet(connector, { connector = null; setupEntry = null }) { InstallConnectorSheet(it, state, store, setupEntry) }
+    state.viewing?.takeIf { it.entry.botId == bot.id }?.let { viewed ->
+        val file = remember(viewed) { SharedViewerFile(store, viewed) }
+        val workDir = remember(viewed) { store.attachments.shareFolder() }
+        Overlay {
+            FileViewer(file, workDir, close = { store.closeViewer() },
+                share = { copy, name -> store.attachments.open(copy, name) },
+                openWith = { copy, name -> store.attachments.openWith(copy, name) },
+                markdown = { MarkdownText(it) })
+        }
+    }
 }
 
 /** The glass back button, the title (tapping it opens the bot's details) and the connection under it. */

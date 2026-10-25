@@ -39,6 +39,37 @@ fun AppStore.saveFile(entryId: String, botId: String, file: SharedFile) {
     }
 }
 
+/** A shared file open in the viewer, and the message it came in. */
+data class ViewedFile(val entry: Entry, val file: SharedFile)
+
+fun AppStore.viewFile(entry: Entry, file: SharedFile) = mutableState.update { it.copy(viewing = ViewedFile(entry, file)) }
+
+fun AppStore.closeViewer() = mutableState.update { it.copy(viewing = null) }
+
+/**
+ * The viewer's side of a shared file: chunks read straight from the computer for playing it, and the
+ * same checked download the download button makes for everything else, kept while the app runs.
+ */
+internal class SharedViewerFile(private val store: AppStore, private val viewed: ViewedFile) : com.codync.android.viewer.ViewerFile {
+    override val id: String = viewed.file.id
+    override val name: String = viewed.file.name
+    override val size: Long = viewed.file.size
+
+    override suspend fun readChunk(offset: Long): ByteArray =
+        HostFiles(store.ready()).readSharedChunk(viewed.entry.id, viewed.file, offset)
+
+    override suspend fun download(progress: (Long) -> Unit): java.io.File {
+        viewerCopies[id]?.takeIf { it.isFile }?.let { progress(size); return it }
+        val folder = withContext(Dispatchers.IO) { store.attachments.shareFolder() }
+        return HostFiles(store.ready()).downloadShared(viewed.entry.id, viewed.file, folder, progress).also { viewerCopies[id] = it }
+    }
+
+    private companion object {
+        /** Checked copies by file ID. The share folder clears them after a day; a missing one downloads again. */
+        val viewerCopies = java.util.concurrent.ConcurrentHashMap<String, java.io.File>()
+    }
+}
+
 fun AppStore.cancelFile(fileId: String) {
     actions[downloadKey(fileId)]?.cancel()
     setDownload(fileId, null)

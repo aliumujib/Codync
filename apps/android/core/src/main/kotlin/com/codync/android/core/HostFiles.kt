@@ -131,6 +131,23 @@ class HostFiles(private val call: suspend (String, JsonObject, Long) -> JsonElem
         return if (digest == artifact.sha256) artifact to bytes.toString(Charsets.UTF_8) else null
     }
 
+    /**
+     * One chunk of a file a bot shared, for playing it while it's read: [CHUNK_BYTES] from [offset], fewer
+     * only at the end. Not hash-checked (the hash covers the whole file); [downloadShared] is.
+     */
+    suspend fun readSharedChunk(entryId: String, file: SharedFile, offset: Long): ByteArray = withContext(Dispatchers.IO) {
+        file.validate()
+        require(offset in 0..file.size) { "Invalid file offset." }
+        val chunk = call("readFile", buildJsonObject { put("entryId", entryId); put("fileId", file.id); put("offset", offset) }, 60_000).jsonObject
+        val data = chunk["data"]?.jsonPrimitive?.contentOrNull
+        val bytes = if (chunk["size"]?.jsonPrimitive?.longOrNull == file.size && data != null && data.length <= CHUNK_BYTES / 3 * 4)
+            try { Base64.getDecoder().decode(data) } catch (_: IllegalArgumentException) { null } else null
+        if (bytes == null || bytes.size.toLong() != minOf(CHUNK_BYTES.toLong(), file.size - offset)) {
+            throw IOException("The file changed on the computer. Close it and open it again.")
+        }
+        bytes
+    }
+
     /** A small text file the host prepared (a memory export), read chunk by chunk. */
     suspend fun readText(botId: String, id: String): String {
         val bytes = java.io.ByteArrayOutputStream()

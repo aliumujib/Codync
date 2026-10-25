@@ -105,6 +105,14 @@ class AttachmentFiles(private val context: Context, private val directory: File)
         context.startActivity(Intent.createChooser(intent, "Share $name").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
+    /** Hands a file in a `shareFolder` to another app that can open it. */
+    fun openWith(shared: File, name: String) {
+        val uri = FileProvider.getUriForFile(context, context.packageName + ".files", shared)
+        val type = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(shared.extension.lowercase()) ?: "application/octet-stream"
+        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        context.startActivity(Intent.createChooser(intent, "Open $name with").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
     companion object {
         /** Where account folder [directory] keeps the files its drafts and queued messages send. */
         fun outgoingFolder(directory: File) = File(directory, "outgoing")
