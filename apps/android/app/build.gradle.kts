@@ -165,9 +165,6 @@ dependencies {
     implementation(libs.vosk) { exclude(group = "net.java.dev.jna", module = "jna") }
     implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
     coreLibraryDesugaring(libs.desugar)
-    implementation(libs.commonmark)
-    implementation(libs.commonmark.tables)
-    implementation(libs.commonmark.strikethrough)
     implementation(libs.coil.compose)
     implementation(libs.coil.network)
     implementation(libs.clerk)
@@ -186,6 +183,7 @@ dependencies {
     implementation(project(":core"))
     implementation(project(":design"))
     implementation(project(":viewer"))
+    implementation(project(":markdown"))
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.foundation)
