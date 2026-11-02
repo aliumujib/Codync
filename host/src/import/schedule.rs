@@ -10,7 +10,7 @@ use serde_json::Value;
 /// The trigger for `schedule` in `zone` (an IANA name), checked from `now` on.
 pub fn trigger(schedule: &Value, zone: &str, now: i64) -> Result<Trigger> {
     let int = |key: &str| schedule[key].as_i64().with_context(|| format!("`{key}` is required"));
-    let cron = |expression: String| Trigger::Cron { expression, time_zone: zone.to_owned() };
+    let cron = |expression: String| Trigger::Cron { expression, time_zone: zone.to_owned(), jitter_seconds: 0 };
     let trigger = match schedule["kind"].as_str().unwrap_or_default() {
         "hourly" => cron(format!("{} * * * *", ranged(int("minute")?, 0, 59, "minute")?)),
         "daily" => cron(at(schedule, "* * *")?),
@@ -112,7 +112,7 @@ mod tests {
 
     fn cron(schedule: &Value) -> String {
         match trigger(schedule, "Europe/Warsaw", 0).expect("valid schedule") {
-            Trigger::Cron { expression, time_zone } => {
+            Trigger::Cron { expression, time_zone, .. } => {
                 assert_eq!(time_zone, "Europe/Warsaw");
                 expression
             }
