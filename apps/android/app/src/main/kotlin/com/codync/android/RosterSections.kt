@@ -17,8 +17,11 @@ internal sealed interface RosterLine {
         override val key: String get() = bot.id
     }
 
-    /** [count] and [unread] cover the section's unpinned bots, the ones shown under it. */
-    data class Header(val name: String, val count: Int, val unread: Int, val folded: Boolean) : RosterLine {
+    /**
+     * [count] and [unread] cover the section's unpinned bots, the ones shown under it. [project] marks a heading made
+     * from the bots' project folder rather than a section the user set: it folds and moves but can't be renamed.
+     */
+    data class Header(val name: String, val count: Int, val unread: Int, val folded: Boolean, val project: Boolean = false) : RosterLine {
         override val key: String get() = "section:$name"
     }
 
@@ -35,9 +38,9 @@ internal sealed interface RosterLine {
  */
 internal fun rosterLines(roster: List<Bot>, folded: Set<String>, order: List<String> = emptyList(), moving: Boolean = false): List<RosterLine> = buildList {
     val (pinned, unpinned) = roster.partition { it.pinned }
-    val sections = unpinned.groupBy(Bot::section)
+    val sections = unpinned.groupBy(Bot::rosterSection)
     pinned.forEach { add(RosterLine.Row(it)) }
-    val custom = sectionNames(unpinned)
+    val custom = unpinned.mapNotNull(Bot::rosterSection).distinct().sortedWith(Collator.getInstance())
     val names = orderedSections(custom + if (sections[null].isNullOrEmpty()) emptyList() else listOf(""), order)
     for (name in names) {
         if (name.isEmpty()) {
@@ -45,12 +48,24 @@ internal fun rosterLines(roster: List<Bot>, folded: Set<String>, order: List<Str
             if (!moving) sections[null].orEmpty().forEach { add(RosterLine.Row(it)) }
         } else {
             val bots = sections.getValue(name)
-            val header = RosterLine.Header(name, bots.size, bots.sumOf { it.unread }, moving || name in folded)
+            val header = RosterLine.Header(name, bots.size, bots.sumOf { it.unread }, moving || name in folded,
+                project = bots.none { it.section != null })
             add(header)
             if (!header.folded) bots.forEach { add(RosterLine.Row(it)) }
         }
     }
 }
+
+/**
+ * A bot's project: the last folder of the folder it works in, so bots working in the same project group together
+ * without the user sorting them. None for a group chat or a bot in its own Codync workspace.
+ */
+internal val Bot.project: String?
+    get() = if (kind == "group" || managedWorkspace) null
+        else cwd.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\').takeIf { it.isNotBlank() }
+
+/** Where the roster shows a bot: the section the user put it in, else its project. */
+internal val Bot.rosterSection: String? get() = section ?: project
 
 /** The sections [bots] are in, sorted the way the phone's language sorts ("İş" where Turkish puts it). */
 internal fun sectionNames(bots: List<Bot>): List<String> = bots.mapNotNull(Bot::section).distinct().sortedWith(Collator.getInstance())

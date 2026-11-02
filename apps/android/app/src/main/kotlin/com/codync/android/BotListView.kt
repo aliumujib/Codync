@@ -212,7 +212,7 @@ private fun LazyListScope.botLines(state: AppState, store: AppStore, roster: Com
         when (line) {
             // Folding drops the section's rows from the list; animateItem fades them out and slides the rest up.
             is RosterLine.Header -> SectionHeader(line, toggle = { actions.toggleSection(line.name) },
-                actions = if (state.supportsSections) sectionActions(rename = { actions.rename(line.name) }, remove = { actions.remove(line.name) }) else emptyList(),
+                actions = if (state.supportsSections && !line.project) sectionActions(rename = { actions.rename(line.name) }, remove = { actions.remove(line.name) }) else emptyList(),
                 modifier = reorderable(sectionReorder, line.name),
                 drag = sectionReorder.handle(line.name),
                 move = { sectionReorder.move(line.name, it) })

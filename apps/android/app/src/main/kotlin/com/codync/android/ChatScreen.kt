@@ -80,6 +80,8 @@ import com.kyant.shapes.Capsule
     var viewing by remember(bot.id) { mutableStateOf<OpenArtifact?>(null) }
     // The bot whose conversation with this one is open.
     var peer by remember(bot.id) { mutableStateOf<String?>(null) }
+    // The chat's files, grouped, each group a row that scrolls sideways.
+    var files by remember(bot.id) { mutableStateOf(false) }
     /** The voice call whose conversation is open (its line's entry id). */
     var callLine by remember(bot.id) { mutableStateOf<String?>(null) }
     var micDenied by remember { mutableStateOf(false) }
@@ -103,7 +105,7 @@ import com.kyant.shapes.Capsule
         // Down to just above the header's bottom; the bottom one stops under Jump to latest.
         ScrollEdge(Edge.Top, top + 84.dp)
         ScrollEdge(Edge.Bottom, with(density) { composerHeight.toDp() } + 4.dp, Modifier.align(Alignment.BottomCenter))
-        ThreadHeader(bot, state, store) { if (bot.kind == "group") editGroup(bot) else details = DetailsRequest() }
+        ThreadHeader(bot, state, store, openFiles = { files = true }) { if (bot.kind == "group") editGroup(bot) else details = DetailsRequest() }
         // The call floats over the chat under the header, as on iOS; the chat stays readable and usable.
         AnimatedVisibility(state.voice != null, Modifier.padding(top = top + 54.dp),
             enter = fadeIn(Motion.fade()) + slideInVertically(Motion.layoutOffset) { -it }, exit = fadeOut(Motion.fade()) + slideOutVertically(Motion.layoutOffset) { -it }) {
@@ -141,14 +143,15 @@ import com.kyant.shapes.Capsule
         state.bots.firstOrNull { it.id == open.botId }?.let { owner -> ArtifactViewer(open, owner, state, store) { viewing = null } }
     }
     CodyncSheet(peer, { peer = null }) { BotConversationView(bot, it, state, store) }
+    CodyncSheet(files, { files = false }) { ChatFilesSheet(bot, state, store, openArtifact = { viewing = it }) { files = false } }
     CodyncSheet(callLine, { callLine = null }) { CallConversationView(bot.id, it, state, store) }
     CodyncSheet(app, { app = null; setupEntry = null }) { ComposioConnectSheet(it, state, store, setupEntry) { store.refreshPlugins() } }
     CodyncSheet(connector, { connector = null; setupEntry = null }) { InstallConnectorSheet(it, state, store, setupEntry) }
-    state.viewing?.takeIf { it.entry.botId == bot.id }?.let { viewed ->
-        val file = remember(viewed) { SharedViewerFile(store, viewed) }
-        val workDir = remember(viewed) { store.attachments.shareFolder() }
+    state.viewing?.takeIf { it.botId == bot.id }?.let { gallery ->
+        val files = remember(gallery) { gallery.files.map { it.viewerFile(store) } }
+        val workDir = remember(gallery) { store.attachments.shareFolder() }
         Overlay {
-            FileViewer(file, workDir, close = { store.closeViewer() },
+            FileViewer(files, gallery.start, workDir, close = { store.closeViewer() },
                 share = { copy, name -> store.attachments.open(copy, name) },
                 openWith = { copy, name -> store.attachments.openWith(copy, name) },
                 markdown = { text, side -> MarkdownText(text, blockPadding = side) })
@@ -157,7 +160,7 @@ import com.kyant.shapes.Capsule
 }
 
 /** The glass back button, the title (tapping it opens the bot's details) and the connection under it. */
-@Composable private fun ThreadHeader(bot: Bot, state: AppState, store: AppStore, openDetails: () -> Unit) {
+@Composable private fun ThreadHeader(bot: Bot, state: AppState, store: AppStore, openFiles: () -> Unit, openDetails: () -> Unit) {
     Box(Modifier.fillMaxWidth().statusBarsPadding().padding(top = 6.dp).padding(horizontal = 16.dp).height(44.dp)) {
         val (source, pressed) = rememberPress()
         Box(Modifier.align(Alignment.CenterStart).size(44.dp).glass(Capsule(), pressed = pressed)
@@ -180,6 +183,17 @@ import com.kyant.shapes.Capsule
             val operating = screen.agentBot == bot.id
             ComputerButton(operating, Modifier.align(Alignment.CenterEnd)) { store.openScreen(bot.id.takeIf { operating }) }
         }
+        if (bot.kind != "group") FilesButton(Modifier.align(Alignment.CenterEnd).padding(end = if (screen != null) 52.dp else 0.dp), openFiles)
+    }
+}
+
+/** Opens the chat's files. */
+@Composable private fun FilesButton(modifier: Modifier, action: () -> Unit) {
+    val (source, pressed) = rememberPress()
+    Box(modifier.size(44.dp).glass(Capsule(), pressed = pressed)
+        .clickable(source, null, role = Role.Button, onClick = action).semantics { contentDescription = "Files" },
+        contentAlignment = Alignment.Center) {
+        Symbol("photo.on.rectangle", size = 22.dp, tint = Palette.text)
     }
 }
 

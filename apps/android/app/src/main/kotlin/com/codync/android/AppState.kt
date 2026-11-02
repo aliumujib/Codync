@@ -67,7 +67,7 @@ data class AppState(
     /** Files bots shared that this phone is downloading, has downloaded or couldn't, by file ID. */
     val fileDownloads: Map<String, FileDownloadState> = emptyMap(),
     /** The shared file open in the full-screen viewer. */
-    val viewing: ViewedFile? = null,
+    val viewing: Gallery? = null,
     val usage: JsonObject = JsonObject(emptyMap()),
     val hello: JsonObject? = null,
     val connection: LinkState = LinkState.Connecting,

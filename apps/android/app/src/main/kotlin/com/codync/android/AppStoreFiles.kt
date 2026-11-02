@@ -3,6 +3,7 @@ package com.codync.android
 import com.codync.android.core.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.serialization.json.decodeFromJsonElement
 
 // Files a bot shares in a chat (iOS `FileDownloads`): one download at a time, checked against its
 // SHA-256, then handed to the system share sheet.
@@ -39,34 +40,95 @@ fun AppStore.saveFile(entryId: String, botId: String, file: SharedFile) {
     }
 }
 
-/** A shared file open in the viewer, and the message it came in. */
-data class ViewedFile(val entry: Entry, val file: SharedFile)
+/** A file in a chat: one a bot shared in a message, or one the user sent. */
+sealed interface ChatFile {
+    val id: String
+    val name: String
+    val size: Long
 
-fun AppStore.viewFile(entry: Entry, file: SharedFile) = mutableState.update { it.copy(viewing = ViewedFile(entry, file)) }
+    data class Shared(val entryId: String, val file: SharedFile) : ChatFile {
+        override val id get() = file.id
+        override val name get() = file.name
+        override val size get() = file.size
+    }
+
+    data class Sent(val botId: String, val file: Attachment) : ChatFile {
+        override val id get() = file.id
+        override val name get() = file.name
+        override val size get() = file.size
+    }
+}
+
+/** The viewer's slideshow: a chat's files, oldest first, opened at [start]. */
+data class Gallery(val botId: String, val files: List<ChatFile>, val start: Int)
+
+/** Files the user attached to a message. */
+internal val Entry.sentFiles: List<Attachment>
+    get() = (data["attachments"] as? kotlinx.serialization.json.JsonArray)
+        ?.let { runCatching { WireJson.decodeFromJsonElement<List<Attachment>>(it) }.getOrNull() }.orEmpty()
+
+/** Every file in [botId]'s chat as far as this phone has it, oldest first. */
+internal fun AppState.chatFiles(botId: String): List<ChatFile> = entries.filter { it.botId == botId }.sortedBy { it.seq }
+    .flatMap { entry -> entry.files.map { ChatFile.Shared(entry.id, it) } + entry.sentFiles.map { ChatFile.Sent(botId, it) } }
+
+/** Opens [file] (shared in [entry]) as part of its chat's slideshow. */
+fun AppStore.viewFile(entry: Entry, file: SharedFile) {
+    val files = state.value.chatFiles(entry.botId).ifEmpty { listOf(ChatFile.Shared(entry.id, file)) }
+    viewGallery(entry.botId, files, files.indexOfFirst { it.id == file.id }.coerceAtLeast(0))
+}
+
+fun AppStore.viewGallery(botId: String, files: List<ChatFile>, start: Int) =
+    mutableState.update { it.copy(viewing = Gallery(botId, files, start)) }
 
 fun AppStore.closeViewer() = mutableState.update { it.copy(viewing = null) }
+
+internal fun ChatFile.viewerFile(store: AppStore): com.codync.android.viewer.ViewerFile = when (this) {
+    is ChatFile.Shared -> SharedViewerFile(store, entryId, file)
+    is ChatFile.Sent -> SentViewerFile(store, botId, file)
+}
+
+/** Checked copies by file ID, in the share folder so Share and Open with can hand them out. The folder clears them after a day. */
+private val viewerCopies = java.util.concurrent.ConcurrentHashMap<String, java.io.File>()
 
 /**
  * The viewer's side of a shared file: chunks read straight from the computer for playing it, and the
  * same checked download the download button makes for everything else, kept while the app runs.
  */
-internal class SharedViewerFile(private val store: AppStore, private val viewed: ViewedFile) : com.codync.android.viewer.ViewerFile {
-    override val id: String = viewed.file.id
-    override val name: String = viewed.file.name
-    override val size: Long = viewed.file.size
+internal class SharedViewerFile(private val store: AppStore, private val entryId: String, private val file: SharedFile) : com.codync.android.viewer.ViewerFile {
+    override val id: String = file.id
+    override val name: String = file.name
+    override val size: Long = file.size
 
     override suspend fun readChunk(offset: Long): ByteArray =
-        HostFiles(store.ready()).readSharedChunk(viewed.entry.id, viewed.file, offset)
+        HostFiles(store.ready()).readSharedChunk(entryId, file, offset)
 
     override suspend fun download(progress: (Long) -> Unit): java.io.File {
         viewerCopies[id]?.takeIf { it.isFile }?.let { progress(size); return it }
         val folder = withContext(Dispatchers.IO) { store.attachments.shareFolder() }
-        return HostFiles(store.ready()).downloadShared(viewed.entry.id, viewed.file, folder, progress).also { viewerCopies[id] = it }
+        return HostFiles(store.ready()).downloadShared(entryId, file, folder, progress).also { viewerCopies[id] = it }
+    }
+}
+
+/** A file the user sent: fetched once into the attachment cache (often already there), then read from the copy. */
+internal class SentViewerFile(private val store: AppStore, private val botId: String, private val file: Attachment) : com.codync.android.viewer.ViewerFile {
+    override val id: String = file.id
+    override val name: String = file.name
+    override val size: Long = file.size
+
+    override suspend fun readChunk(offset: Long): ByteArray = withContext(Dispatchers.IO) {
+        java.io.RandomAccessFile(download {}, "r").use { raf ->
+            val length = minOf(com.codync.android.viewer.ViewerFile.CHUNK_BYTES.toLong(), size - offset).toInt().coerceAtLeast(0)
+            ByteArray(length).also { raf.seek(offset); raf.readFully(it) }
+        }
     }
 
-    private companion object {
-        /** Checked copies by file ID. The share folder clears them after a day; a missing one downloads again. */
-        val viewerCopies = java.util.concurrent.ConcurrentHashMap<String, java.io.File>()
+    override suspend fun download(progress: (Long) -> Unit): java.io.File {
+        viewerCopies[id]?.takeIf { it.isFile }?.let { progress(size); return it }
+        val cached = store.attachment(botId, file)
+        return withContext(Dispatchers.IO) {
+            val folder = store.attachments.shareFolder().apply { mkdirs() }
+            cached.copyTo(java.io.File(folder, AttachmentFiles.cleanName(file.name)), overwrite = true)
+        }.also { progress(size); viewerCopies[id] = it }
     }
 }
 

@@ -28,6 +28,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -63,14 +65,48 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * A file a bot shared, full screen. Video and audio play while they're read from the computer; everything
- * else opens once its checked copy has downloaded. A ZIP's files open on top of it, and back returns to
- * the list. Share and Open with always hand out the checked copy.
+ * A chat's files, full screen, as a slideshow: swipe between [files], starting at [start]. Video and audio play
+ * while they're read from the computer (only the file on screen); everything else opens once its checked copy has
+ * downloaded. A ZIP's files open on top of it, and back returns to the list. Share and Open with always hand out the
+ * checked copy.
  *
  * @param workDir where files taken out of a ZIP go; it must be somewhere [share] and [openWith] can hand out.
  * @param markdown the app's own Markdown renderer, so `.md` files read like chat messages. It insets text by
  *   `sidePadding` and lets tables run edge to edge.
  */
+@Composable fun FileViewer(
+    files: List<ViewerFile>,
+    start: Int,
+    workDir: File,
+    close: () -> Unit,
+    share: (File, String) -> Unit,
+    openWith: (File, String) -> Unit,
+    markdown: @Composable (text: String, sidePadding: Dp) -> Unit,
+) {
+    if (files.isEmpty()) { LaunchedEffect(Unit) { close() }; return }
+    val scope = rememberCoroutineScope()
+    // Files taken out of a ZIP, shown over the slideshow until back.
+    var nested by remember { mutableStateOf(listOf<ViewerFile>()) }
+    // Kept for the whole viewer, so swiping back or returning to a ZIP's list doesn't download it again.
+    val loaders = remember { HashMap<String, Downloader>() }
+    val loader = { file: ViewerFile -> loaders.getOrPut(file.id) { Downloader(file, scope) } }
+    val pager = rememberPagerState(start.coerceIn(0, files.lastIndex)) { files.size }
+    val back = { if (nested.isNotEmpty()) nested = nested.dropLast(1) else close() }
+    BackHandler(onBack = back)
+    Box(Modifier.fillMaxSize()) {
+        HorizontalPager(pager, Modifier.fillMaxSize(), key = { files[it].id }, userScrollEnabled = nested.isEmpty()) { page ->
+            val file = files[page]
+            FilePage(file, loader(file), nested = false, back, workDir, share, openWith, markdown,
+                active = page == pager.settledPage && nested.isEmpty(),
+                position = if (files.size > 1) "${page + 1} of ${files.size}" else null) { nested = nested + it }
+        }
+        nested.lastOrNull()?.let { top ->
+            key(top.id) { FilePage(top, loader(top), nested = true, back, workDir, share, openWith, markdown, active = true, position = null) { nested = nested + it } }
+        }
+    }
+}
+
+/** One file, full screen (see the slideshow above). */
 @Composable fun FileViewer(
     file: ViewerFile,
     workDir: File,
@@ -78,19 +114,7 @@ import kotlinx.coroutines.launch
     share: (File, String) -> Unit,
     openWith: (File, String) -> Unit,
     markdown: @Composable (text: String, sidePadding: Dp) -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    var stack by remember(file.id) { mutableStateOf(listOf(file)) }
-    // Kept for the whole viewer, so returning to a ZIP's list doesn't download it again.
-    val loaders = remember(file.id) { HashMap<String, Downloader>() }
-    val back = { if (stack.size > 1) stack = stack.dropLast(1) else close() }
-    BackHandler(onBack = back)
-    val top = stack.last()
-    key(top.id) {
-        FilePage(top, loaders.getOrPut(top.id) { Downloader(top, scope) }, nested = stack.size > 1, back, workDir,
-            share, openWith, markdown) { stack = stack + it }
-    }
-}
+) = FileViewer(listOf(file), 0, workDir, close, share, openWith, markdown)
 
 /** Where a file's checked copy is. */
 internal sealed interface Load {
@@ -138,6 +162,8 @@ internal class Downloader(private val file: ViewerFile, private val scope: Corou
     share: (File, String) -> Unit,
     openWith: (File, String) -> Unit,
     markdown: @Composable (text: String, sidePadding: Dp) -> Unit,
+    active: Boolean,
+    position: String?,
     open: (ViewerFile) -> Unit,
 ) {
     val named = remember(file.id) { FileKind.of(file.name) }
@@ -145,12 +171,13 @@ internal class Downloader(private val file: ViewerFile, private val scope: Corou
     val copy = (load as? Load.Ready)?.file
     // A name that says nothing is sniffed once the copy is here.
     val kind = remember(file.id, copy) { if (named == FileKind.Other && copy != null) sniff(copy) else named }
-    LaunchedEffect(file.id) { if (!named.streams) loader.fetch() }
+    // Only the file on screen downloads or plays; its neighbours in the slideshow wait until they're swiped to.
+    LaunchedEffect(file.id, active) { if (active && !named.streams) loader.fetch() }
     var chrome by remember(file.id) { mutableStateOf(true) }
     val media = kind == FileKind.Video || kind == FileKind.Image
-    val player = if (kind.streams) rememberStreamingPlayer(file) else null
+    val player = if (kind.streams && active) rememberStreamingPlayer(file) else null
     val playback = player?.let { rememberPlayback(it) }
-    if (media) LightSystemBarIcons()
+    if (media && active) LightSystemBarIcons()
 
     CodyncTheme(dark = media || LocalDark.current) {
         val insets = viewerInsets()
@@ -161,7 +188,7 @@ internal class Downloader(private val file: ViewerFile, private val scope: Corou
                 ScrollEdge(Edge.Bottom, insets.calculateBottomPadding(), Modifier.align(Alignment.BottomCenter))
             }
             AnimatedVisibility(chrome || !media, Modifier.align(Alignment.TopCenter), enter = fadeIn(), exit = fadeOut()) {
-                Header(file.name, detail(file, kind, load), nested, back,
+                Header(file.name, listOfNotNull(position, detail(file, kind, load)).joinToString(" · "), nested, back,
                     share = { loader.fetch { share(it, file.name) } }, openWith = { loader.fetch { openWith(it, file.name) } })
             }
             if (player != null && playback?.error == null) {
@@ -172,7 +199,9 @@ internal class Downloader(private val file: ViewerFile, private val scope: Corou
         }) {
             when {
                 player != null && playback != null -> MediaPane(file, kind, player, playback, toggleChrome = { chrome = !chrome })
+                kind.streams -> Symbol(kind.symbol, Modifier.align(Alignment.Center), size = 48.dp, tint = Palette.secondary)
                 load is Load.Failed -> Message(kind.symbol, load.message) { SecondaryButton("Try again") { loader.fetch() } }
+                copy == null && !active -> Symbol(kind.symbol, Modifier.align(Alignment.Center), size = 48.dp, tint = Palette.secondary)
                 copy == null -> Downloading(file, (load as? Load.Fetching)?.received ?: 0)
                 else -> when (kind) {
                     FileKind.Image -> ImagePane(copy, file.name, toggleChrome = { chrome = !chrome })

@@ -150,4 +150,16 @@ class RosterSectionsTest {
         assertTrue(host("2.33.0").supportsLeadChoice)
         assertFalse(host(null).supportsLeadChoice)
     }
+
+    @Test fun botsWithoutASectionGroupByTheirProjectFolder() {
+        val plum = Bot("plum", cwd = "/app")
+        val plum2 = Bot("plum2", cwd = "/app/")
+        val site = Bot("site", cwd = "/Users/me/code/site")
+        val own = Bot("own", cwd = "/Users/me/.codync/bots/own", managedWorkspace = true)
+        val named = Bot("named", cwd = "/app", section = "Plum")
+        val lines = rosterLines(listOf(plum, site, own, named, plum2), emptySet())
+        assertEquals(listOf("section:app", "plum", "plum2", "section:Plum", "named", "section:site", "site", "label:bots", "own"), lines.map { it.key })
+        val headers = lines.filterIsInstance<RosterLine.Header>().associate { it.name to it.project }
+        assertEquals(mapOf("Plum" to false, "app" to true, "site" to true), headers)
+    }
 }
