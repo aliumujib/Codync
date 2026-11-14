@@ -348,14 +348,29 @@ async fn install_binary(agent: &Value, target: &Value, cmd: &Path, progress: &im
     Ok(dir)
 }
 
-/// Registry builds update often; keep only the version just installed.
+/// Registry builds update often; keep only the version just installed. Bots that started earlier
+/// still launch the old version's path (their command was resolved then), so on unix each old version
+/// becomes a link to the new one instead of vanishing: their next chat starts the new build rather
+/// than failing with "No such file or directory".
 fn remove_other_versions(installed: &Path) {
     let Some(parent) = installed.parent() else { return };
     let Ok(entries) = std::fs::read_dir(parent) else { return };
     for e in entries.flatten() {
         let p = e.path();
-        if p != installed && p.is_dir() {
-            let _ = std::fs::remove_dir_all(p);
+        if p == installed {
+            continue;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(&p) else { continue };
+        if meta.is_symlink() {
+            let _ = std::fs::remove_file(&p);
+        } else if meta.is_dir() {
+            let _ = std::fs::remove_dir_all(&p);
+        } else {
+            continue;
+        }
+        #[cfg(unix)]
+        if let Some(name) = installed.file_name() {
+            let _ = std::os::unix::fs::symlink(name, &p);
         }
     }
 }
@@ -437,9 +452,28 @@ mod tests {
         for v in ["1.0.0", "1.1.0"] {
             std::fs::create_dir_all(root.join(v)).unwrap();
         }
+        std::fs::write(root.join("1.0.0/claude"), "old").unwrap();
+        std::fs::write(root.join("1.1.0/claude"), "new").unwrap();
         remove_other_versions(&root.join("1.1.0"));
-        assert!(!root.join("1.0.0").exists());
-        assert!(root.join("1.1.0").exists());
+        assert!(root.join("1.1.0").is_dir() && !root.join("1.1.0").is_symlink());
+        if cfg!(unix) {
+            // A bot still launching the old path gets the new build, not "No such file or directory".
+            assert!(root.join("1.0.0").is_symlink());
+            assert_eq!(std::fs::read_to_string(root.join("1.0.0/claude")).unwrap(), "new");
+        } else {
+            assert!(!root.join("1.0.0").exists());
+        }
+
+        // The next update re-points the old link and turns 1.1.0 into a link too.
+        std::fs::create_dir_all(root.join("1.2.0")).unwrap();
+        std::fs::write(root.join("1.2.0/claude"), "newer").unwrap();
+        remove_other_versions(&root.join("1.2.0"));
+        if cfg!(unix) {
+            for v in ["1.0.0", "1.1.0"] {
+                assert_eq!(std::fs::read_to_string(root.join(v).join("claude")).unwrap(), "newer", "{v}");
+            }
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[cfg(unix)]
