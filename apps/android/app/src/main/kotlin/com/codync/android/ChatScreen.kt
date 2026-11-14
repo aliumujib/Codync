@@ -1,6 +1,7 @@
 package com.codync.android
 
 import androidx.compose.animation.AnimatedVisibility
+import kotlinx.coroutines.flow.first
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -233,14 +234,19 @@ import com.kyant.shapes.Capsule
     val items = chatItems(entries, pending)
     val working = bot.isWorking(bot.id) && state.connection is LinkState.Ready
     val more = bot.id !in state.historyComplete
+    val oldest = state.entries.firstOrNull { it.botId == bot.id }?.seq
     val details by ThinkingDetails.enabled.collectAsStateWithLifecycle()
     // Pull to refresh reconnects, like Reconnect in the roster's computer menu, until the link is back.
     ConversationList(items.lastOrNull()?.id, entries.lastOrNull()?.rev, working, padding, store::refreshConnection, indicatorTop) {
         if (more) item("earlier") {
             Box(Modifier.fillMaxWidth().padding(vertical = 14.dp).clearAndSetSemantics { contentDescription = "Loading earlier messages" },
                 contentAlignment = Alignment.Center) { Spinner(14.dp) }
-            // A chat shorter than the screen never scrolls, so showing the row is the trigger.
-            LaunchedEffect(Unit) { if ("history" !in state.busy) store.loadHistory() }
+            // A chat shorter than the screen never scrolls, so showing the row is the trigger. A page of mostly tool steps
+            // adds few rows and leaves it showing, so each page that lands asks for the next.
+            LaunchedEffect(oldest) {
+                store.state.first { "history" !in it.busy }
+                store.loadHistory()
+            }
         }
         // Shown while earlier messages may still load, as on the iPhone.
         if (items.isEmpty()) item("intro") { IntroCard(bot, state) }

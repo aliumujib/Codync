@@ -72,19 +72,27 @@ fun AppStore.loadHistory() {
     val id = state.value.selectedBot ?: return
     action("history") {
         val mirror = requireNotNull(database)
+        val before = state.value.entries.filter { it.botId == id }.minOfOrNull(Entry::seq) ?: Long.MAX_VALUE
+        val window = chatWindows[id] ?: CHAT_WINDOW
+        // Older entries this phone already has come from its database; only past those does it ask the computer.
+        if (withContext(Dispatchers.IO) { mirror.heldBefore(id, before) } > 0) {
+            chatWindows[id] = window + HISTORY_PAGE
+            refresh()
+            return@action
+        }
         if (withContext(Dispatchers.IO) { mirror.historyComplete(id) }) {
             mutableState.update { it.copy(historyComplete = it.historyComplete + id) }
             return@action
         }
-        val before = state.value.entries.filter { it.botId == id }.minOfOrNull(Entry::seq) ?: Long.MAX_VALUE
         val active = ready()
-        val response = active.call("history", buildJsonObject { put("botId", id); put("beforeSeq", before); put("limit", 100) })
+        val response = active.call("history", buildJsonObject { put("botId", id); put("beforeSeq", before); put("limit", HISTORY_PAGE) })
         val entries = response.jsonObject.getValue("entries").jsonArray.map { Entry.decode(it.jsonObject) }
         withContext(Dispatchers.IO) {
             mirror.receive(entries)
-            if (entries.size < 100) mirror.finishHistory(id)
+            if (entries.size < HISTORY_PAGE) mirror.finishHistory(id)
         }
-        if (entries.size < 100) mutableState.update { it.copy(historyComplete = it.historyComplete + id) }
+        chatWindows[id] = window + entries.size
+        if (entries.size < HISTORY_PAGE) mutableState.update { it.copy(historyComplete = it.historyComplete + id) }
         refresh()
     }
 }
@@ -103,6 +111,11 @@ fun AppStore.cancelQueued(send: PendingSend) = action("cancel:" + send.nonce) {
         else -> throw IOException("Couldn't take the message back. It may have been delivered already.")
     }
 }
+
+/** A send cut off midway; reconnecting asks the computer whether it arrived (`findInterruptedSends`). */
+internal const val INTERRUPTED = "Sending was interrupted. Retry uses the same message ID."
+/** What an interrupted send says once the computer confirmed it never got it. */
+internal const val NOT_SENT = "Not sent: the app closed before it went. Retry sends it now."
 
 internal suspend fun AppStore.deliver(send: PendingSend) {
     if (!sends.add(send.nonce)) return
@@ -143,7 +156,7 @@ internal suspend fun AppStore.deliver(send: PendingSend) {
             syncPush(); PushDelivery.schedule(application)
         }
     } catch (error: CancellationException) {
-        withContext(NonCancellable) { savePending(send.copy(status = SendStatus.Failed, error = "Sending was interrupted. Retry uses the same message ID.")) }
+        withContext(NonCancellable) { savePending(send.copy(status = SendStatus.Failed, error = INTERRUPTED)) }
         throw error
     } catch (error: Exception) {
         savePending(send.copy(status = SendStatus.Failed, error = error.message ?: "Couldn't send."))

@@ -1,5 +1,8 @@
 package com.codync.android
 
+import org.junit.Assert.assertFalse
+import com.codync.android.core.SendStatus
+import com.codync.android.core.PendingSend
 import androidx.test.platform.app.InstrumentationRegistry
 import android.database.sqlite.SQLiteDatabase
 import android.content.ContentValues
@@ -21,6 +24,33 @@ class MirrorDatabaseTest {
         data = buildJsonObject { put("text", text); nonce?.let { put("clientNonce", it) } })
 
     @After fun cleanup() { mirror.close(); directory.deleteRecursively() }
+
+    @Test fun snapshotHoldsEachChatsNewestEntriesAndScrollingUpWidensIt() {
+        fun chat(bot: String, from: Long, count: Int) = (0 until count).map {
+            Entry("$bot-$it", from + it * 2, bot, rev = from + it * 2, kind = "tool", data = buildJsonObject { put("text", "$it") })
+        }
+        mirror.receive(chat("busy", 1, CHAT_WINDOW + 50) + chat("quiet", 2, 3))
+        val held = mirror.snapshot().entries
+        assertEquals(CHAT_WINDOW, held.count { it.botId == "busy" })
+        assertEquals("the newest ones", "busy-${CHAT_WINDOW + 49}", held.last { it.botId == "busy" }.id)
+        assertEquals(3, held.count { it.botId == "quiet" })
+        assertEquals("still in sequence order across chats", held.map { it.seq }.sorted(), held.map { it.seq })
+        val oldest = held.filter { it.botId == "busy" }.minOf { it.seq }
+        assertEquals(50, mirror.heldBefore("busy", oldest))
+        assertEquals(CHAT_WINDOW + 50, mirror.snapshot(mapOf("busy" to CHAT_WINDOW + HISTORY_PAGE)).entries.count { it.botId == "busy" })
+    }
+
+    @Test fun aMessageSentAgainByHandUnderANewIdCountsAsSentAgain() {
+        val lost = PendingSend("lost", "b", "that bio is shit can we update it", createdAt = 1_000, status = SendStatus.Failed)
+        fun user(id: String, nonce: String, text: String, at: Long) =
+            Entry(id, at, "b", rev = at, kind = "user", createdAt = at, data = buildJsonObject { put("text", text); put("clientNonce", nonce) })
+        mirror.receive(listOf(user("before", "n0", "that bio is shit can we update it", 500)))
+        assertFalse("only a later message counts", mirror.sentAgain(lost))
+        mirror.receive(listOf(user("again", "n1", "that bio is shit can we update it\n\nSending was interrupted. Retry", 2_000)))
+        assertTrue("pasted with the error label after it", mirror.sentAgain(lost))
+        assertFalse("another chat", mirror.sentAgain(lost.copy(botId = "other")))
+        assertFalse("different words", mirror.sentAgain(lost.copy(text = "something else")))
+    }
 
     @Test fun iconCacheTracksNewerRevisionsAndResetsWithTheHostDatabase() {
         mirror.setStamp("old", "build")

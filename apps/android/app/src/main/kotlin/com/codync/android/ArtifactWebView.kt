@@ -31,8 +31,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 }
 
 @SuppressLint("SetJavaScriptEnabled", "ViewConstructor")
-private class ArtifactView(context: Context, id: String, interactive: Boolean, open: (String) -> Unit, gone: () -> Unit) : WebView(context) {
+private class ArtifactView(context: Context, id: String, private val interactive: Boolean, open: (String) -> Unit, gone: () -> Unit) : WebView(context) {
     private var shown: String? = null
+
+    /** A card's preview takes no touches: it's drawn at half size, but still lays out (and takes touches) at full
+     *  size, over its card's title and the messages under it, so a tap there never reached the card. */
+    override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean = interactive && super.dispatchTouchEvent(event)
     /** Never resolves: relative links go nowhere, and the artifact gets an origin to keep its storage under (as on iPhone). */
     private val origin = "${id.lowercase()}.artifact.codync.invalid"
 

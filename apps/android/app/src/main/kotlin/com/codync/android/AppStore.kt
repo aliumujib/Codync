@@ -63,6 +63,8 @@ class AppStore internal constructor(
     internal var mirrorBots: List<Bot> = emptyList()
     /** Section moves shown but not answered yet, oldest first. */
     internal val pendingSectionMoves = mutableListOf<SectionMove>()
+    /** Chats scrolled back past [CHAT_WINDOW]: how many of their newest entries to hold (`MirrorDatabase.snapshot`). */
+    internal val chatWindows = mutableMapOf<String, Int>()
     internal var pluginsRefreshAgain = false
     /** The host version an undecodable event already made the mirror fetch everything again for. */
     internal var rewoundFor: String? = null
@@ -137,7 +139,8 @@ class AppStore internal constructor(
 
     internal suspend fun refresh() {
         val mirror = database ?: return
-        val snapshot = withContext(Dispatchers.IO) { mirror.snapshot() }
+        val windows = chatWindows.toMap()
+        val snapshot = withContext(Dispatchers.IO) { mirror.snapshot(windows) }
         val retainedDraftFiles = state.value.drafts.values.flatMap { it.files }.map { it.path }.toSet()
         val retired = state.value.pending.filter { old -> snapshot.pending.none { it.nonce == old.nonce } }.flatMap { it.files }.filter { it.path !in retainedDraftFiles }
         withContext(Dispatchers.IO) { retired.forEach(attachments::discard) }

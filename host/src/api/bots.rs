@@ -149,6 +149,14 @@ pub(super) async fn call(hub: &Arc<Hub>, caller: &Caller, method: &str, b: Value
                     .await??;
             json!({"data": base64::engine::general_purpose::STANDARD.encode(data), "size": size})
         }
+        // Which of this phone's unconfirmed messages the computer has (its sends were cut off before the reply):
+        // their entries, so the phone can mark them sent instead of offering to send them again.
+        "findSends" => {
+            let bot = str_arg(&b, "botId")?;
+            let nonces: Vec<&str> = b["nonces"].as_array().into_iter().flatten().filter_map(Value::as_str).take(200).collect();
+            let entries: Vec<_> = nonces.iter().filter_map(|n| hub.store.find_by_nonce(bot, n)).collect();
+            json!({"entries": entries})
+        }
         "send" => {
             let bot = str_arg(&b, "botId")?;
             let text = b["text"].as_str().unwrap_or_default().trim();

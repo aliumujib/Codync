@@ -123,6 +123,7 @@ fun AppStore.connect() {
                                 refresh()
                                 backoff = 1_000
                                 reconcileMailbox(active)
+                                findInterruptedSends(active)
                                 acknowledgeVisible()
                                 syncPush()
                                 while (isActive) {
@@ -255,6 +256,31 @@ private suspend fun AppStore.reconcileMailbox(active: EncryptedChannel) {
         }
     } catch (error: CancellationException) { throw error }
     catch (_: IOException) { /* Reconcile when the relay connection recovers. */ }
+}
+
+/**
+ * Messages marked failed may have reached the computer before the reply was lost (the app closed or crashed
+ * mid-send). Asks which of them it has (`findSends`): those become sent; the rest say plainly they didn't go.
+ * A computer that predates `findSends` leaves them as they were.
+ */
+internal suspend fun AppStore.findInterruptedSends(active: EncryptedChannel) {
+    val failed = state.value.pending.filter { it.status == SendStatus.Failed }
+    if (failed.isEmpty()) return
+    for ((bot, sends) in failed.groupBy { it.botId }) {
+        val found = try {
+            entriesOf(active.call("findSends", buildJsonObject { put("botId", bot); put("nonces", JsonArray(sends.map { JsonPrimitive(it.nonce) })) }))
+        } catch (error: CancellationException) { throw error } catch (_: Exception) { return }
+        // Its entry clears the pending copy (`MirrorDatabase.writeEntry`).
+        if (found.isNotEmpty()) withContext(Dispatchers.IO) { requireNotNull(database).receive(found) }
+        val arrived = found.mapNotNull { it.clientNonce }.toSet()
+        for (send in sends.filter { it.nonce !in arrived }) withContext(Dispatchers.IO) {
+            val mirror = requireNotNull(database)
+            // Sent again by hand: retrying this copy would send it twice.
+            if (mirror.sentAgain(send)) mirror.discard(send.nonce)
+            else if (send.error == INTERRUPTED) mirror.save(send.copy(error = NOT_SENT))
+        }
+    }
+    refresh()
 }
 
 /** The host asked for the stream to start over from the mirror's cursor (or the mirror rewound). */

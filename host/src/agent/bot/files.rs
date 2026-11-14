@@ -90,8 +90,8 @@ impl Actor {
 
     /// A published artifact's card (`chat::artifacts`, its entry's `data`): a message of the turn, like a shared file.
     pub(super) fn post_artifact(&mut self, data: Value) -> Result<String> {
-        // A routine's artifact joins the Library without a card (upstream); only its files post into the chat.
-        ensure!(self.active_routine.is_none(), "send_file and artifact cards are only available in the bot's own chat");
+        // A routine's turn writes into the bot's own chat too (`can_send_file`), so its artifacts post a card there
+        // like its files: otherwise they sit in the Library where nobody sees them.
         let turn = self.can_send_file()?;
         let text = data["text"].as_str().unwrap_or_default().to_owned();
         self.close_seg();

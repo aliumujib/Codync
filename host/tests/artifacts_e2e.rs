@@ -140,21 +140,21 @@ async fn bots_publish_update_and_the_apps_read_and_rename_artifacts() {
     let items = library_until(&host, bot, |items| items.len() == 3).await;
     assert_eq!((items[0]["kind"].as_str(), items[0]["file"]["name"].as_str()), (Some("file"), Some("notes.txt")));
 
-    // A routine's artifact joins the Library without a card, and its answer says so.
+    // A routine's artifact posts its card in the bot's own chat, like the routine's files.
     let routine =
         json!({"botId": bot, "name": "Report", "instruction": "make-artifact", "triggers": [{"type": "webhook"}]});
     let routine = host.call("saveRoutine", routine).await;
     host.call("runRoutine", json!({"botId": bot, "id": routine["routine"]["id"]})).await;
     let items = library_until(&host, bot, |items| items.iter().filter(|i| i["kind"] == "artifact").count() == 2).await;
     let made = items.iter().find(|i| i["artifact"]["title"] == "Weekly report").unwrap();
-    assert!(made["artifact"]["entryId"].is_null(), "nothing to reply to: {made}");
+    assert!(made["artifact"]["entryId"].is_string(), "its card is in the chat: {made}");
     let answered = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let made = std::fs::read_to_string(cwd.join("artifact-results.json")).ok();
             let answer = made
                 .and_then(|made| serde_json::from_str::<Vec<Value>>(&made).ok())
                 .and_then(|made| serde_json::from_str::<Value>(made.first()?["content"][0]["text"].as_str()?).ok());
-            if let Some(answer) = answer.filter(|answer| answer["card"].is_string()) {
+            if let Some(answer) = answer {
                 return answer;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -162,10 +162,10 @@ async fn bots_publish_update_and_the_apps_read_and_rename_artifacts() {
     })
     .await
     .unwrap();
-    assert!(answered["card"].as_str().unwrap().starts_with("not posted"), "{answered}");
+    assert!(answered["card"].is_null(), "posted, so no note about the card: {answered}");
     let history = host.call("history", json!({"botId": bot})).await;
     let cards = history["entries"].as_array().unwrap().iter().filter(|e| e["data"]["artifact"].is_object()).count();
-    assert_eq!(cards, 2, "the routine's artifact has no card");
+    assert_eq!(cards, 3, "the routine's artifact has a card too");
 
     // Deleting the bot deletes its artifacts.
     host.call("deleteBot", json!({"botId": bot})).await;

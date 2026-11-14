@@ -16,6 +16,10 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 
+/** How many of each chat's newest entries the app holds in memory; scrolling up adds [HISTORY_PAGE] at a time. */
+const val CHAT_WINDOW = 400
+const val HISTORY_PAGE = 100
+
 /** All entity writes, send reconciliation and the event cursor commit together. */
 class MirrorDatabase(context: Context, directory: File, computerId: String) :
     SQLiteOpenHelper(context, file(directory, computerId).absolutePath, null, 3) {
@@ -84,13 +88,19 @@ class MirrorDatabase(context: Context, directory: File, computerId: String) :
         }
     }
 
-    @Synchronized fun snapshot(): MirrorSnapshot {
+    /**
+     * What the app holds in memory: every bot, and each chat's newest [windows] entries ([CHAT_WINDOW] unless
+     * scrolling up widened it, `loadHistory`). The database keeps the rest. Busy bots log tens of thousands of
+     * tool steps, and decoding them all, on every update, ran the app out of memory.
+     */
+    @Synchronized fun snapshot(windows: Map<String, Int> = emptyMap()): MirrorSnapshot {
         val db = readableDatabase
         val icons = icons()
+        val chats = db.rawQuery("SELECT DISTINCT bot_id FROM entries", null).use { buildList { while (it.moveToNext()) add(it.getString(0)) } }
         return MirrorSnapshot(
             rows(db, "SELECT payload FROM bots WHERE deleted=0") { WireJson.decodeFromString<Bot>(it) }
                 .map { it.copy(customIcon = icons["bot:${it.id}"]) },
-            rows(db, "SELECT payload FROM entries ORDER BY seq") { WireJson.decodeFromString<Entry>(it) },
+            chats.flatMap { newest(db, it, windows[it] ?: CHAT_WINDOW) }.sortedBy { it.seq },
             pending(db, "ORDER BY created"),
             meta(db, "rev")?.toLong() ?: 0,
             meta(db, "usage")?.let { WireJson.parseToJsonElement(it).jsonObject } ?: JsonObject(emptyMap()),
@@ -98,6 +108,26 @@ class MirrorDatabase(context: Context, directory: File, computerId: String) :
             icons,
         )
     }
+
+    private fun newest(db: SQLiteDatabase, botId: String, limit: Int): List<Entry> =
+        db.rawQuery("SELECT payload FROM entries WHERE bot_id=? ORDER BY seq DESC LIMIT ?", arrayOf(botId, limit.toString())).use {
+            buildList { while (it.moveToNext()) add(WireJson.decodeFromString<Entry>(it.getString(0))) }
+        }.asReversed()
+
+    /** Whether [send]'s words reached its chat later under another message ID: typed or pasted again by hand. */
+    @Synchronized fun sentAgain(send: PendingSend): Boolean {
+        val words = send.text.trim().takeIf { it.isNotEmpty() } ?: return false
+        return readableDatabase.rawQuery("SELECT payload FROM entries WHERE bot_id=? AND nonce IS NOT NULL", arrayOf(send.botId)).use {
+            generateSequence { if (it.moveToNext()) WireJson.decodeFromString<Entry>(it.getString(0)) else null }
+                .any { entry -> entry.createdAt >= send.createdAt && entry.text.trim().startsWith(words) }
+        }
+    }
+
+    /** How many of a chat's entries older than [seq] this phone already has, outside what the app holds in memory. */
+    @Synchronized fun heldBefore(botId: String, seq: Long): Long =
+        readableDatabase.compileStatement("SELECT COUNT(*) FROM entries WHERE bot_id=? AND seq<?").use {
+            it.bindString(1, botId); it.bindLong(2, seq); it.simpleQueryForLong()
+        }
 
     @Synchronized fun revision(): Long = meta(readableDatabase, "rev")?.toLong() ?: 0
 
@@ -160,8 +190,7 @@ class MirrorDatabase(context: Context, directory: File, computerId: String) :
     }
     @Synchronized fun discard(nonce: String) = transaction { it.delete("pending", "nonce=?", arrayOf(nonce)) }
     @Synchronized fun recoverInterrupted() = transaction { db ->
-        pending(db).filter { it.status == SendStatus.Sending }.forEach { writePending(db, it.copy(status = SendStatus.Failed,
-            error = "Sending was interrupted. Retry uses the same message ID.")) }
+        pending(db).filter { it.status == SendStatus.Sending }.forEach { writePending(db, it.copy(status = SendStatus.Failed, error = INTERRUPTED)) }
     }
     @Synchronized private fun relocate(from: File, to: File) = transaction { db ->
         pending(db).forEach { writePending(db, it.copy(files = it.files.map { file -> AttachmentFiles.moved(file, from, to) })) }

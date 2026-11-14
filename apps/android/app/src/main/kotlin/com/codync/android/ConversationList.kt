@@ -7,7 +7,9 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.animateScrollBy
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -29,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.Dp
@@ -49,9 +52,14 @@ import kotlinx.coroutines.launch
     val following = rememberFollowing(list, last, rev, working, bottom)
     val scope = rememberCoroutineScope()
     val focus = LocalFocusManager.current
-    // Child controls consume their taps; only a plain conversation tap clears the composer.
+    // Child controls consume their taps; only a plain conversation tap clears the composer. It watches without
+    // consuming: a message checks the lift after this has seen it (`contextActions`), and a consumed lift kept every
+    // artifact card from opening.
     Box(Modifier.fillMaxSize().pointerInput(focus) {
-        detectTapGestures { focus.clearFocus() }
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
+            if (waitForUpOrCancellation(PointerEventPass.Final) != null) focus.clearFocus()
+        }
     }) {
         if (refresh == null) LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = padding, content = content)
         else PullToRefresh(refresh, Modifier.fillMaxSize(), indicatorTop) {

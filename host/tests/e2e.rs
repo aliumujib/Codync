@@ -165,6 +165,11 @@ async fn turn_with_approval_reaches_a_final_reply() {
     host.call("send", json!({"botId": bot, "text": "go", "clientNonce": "n1"})).await;
     // Retrying with the same nonce must not queue a second turn.
     host.call("send", json!({"botId": bot, "text": "go", "clientNonce": "n1"})).await;
+    // A phone whose send was cut off asks which of its messages arrived.
+    let found = host.call("findSends", json!({"botId": bot, "nonces": ["n1", "never-sent"]})).await;
+    let found = found["entries"].as_array().unwrap();
+    assert_eq!(found.len(), 1, "only the one that arrived: {found:?}");
+    assert_eq!(found[0]["data"]["clientNonce"], "n1");
 
     let card = host.wait_for(&bot, |e| e["kind"] == "permission" && e["data"]["status"] == "pending").await;
     assert_eq!(card["data"]["title"], "Edit a.txt");
